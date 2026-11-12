@@ -167,8 +167,8 @@ const home = await call("home", () => api.getHome({ category: "sub" }), (rows) =
 const pop = await call("popular", () => api.popular({ category: "sub", page: 1, dateRange: 7 }), (l) =>
   `${l.length} items | ${l[0] ? l[0].title + " -> " + l[0].url : "-"}`);
 
-const srch = await call("search", () => api.search("naruto", 1, { category: "" }), (l) =>
-  `${l.length} items | ${l[0] ? l[0].title + " -> " + l[0].url : "-"}`);
+const srch = await call("search", () => api.search(process.argv[4] || "naruto", 1, { category: "" }), (l) =>
+  `${l.length} items | ${l[0] ? l[0].title + (l[0].englishTitle ? " [" + l[0].englishTitle + "]" : "") + " -> " + l[0].url : "-"}`);
 
 let detail = null;
 const target = process.argv[3] || pop?.[0]?.url || home?.[0]?.items?.[0]?.url || srch?.[0]?.url;
