@@ -8,7 +8,7 @@
 
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://tudorama.com';
-var VERSION = '1.1.0';
+var VERSION = '1.2.0';
 
 function getInfo() {
   return {
@@ -104,13 +104,15 @@ function _cards(html) {
     var href = (c.match(/href="(https?:\/\/tudorama\.com\/(?:serie|pelicula)\/[^"]+)"/i) || [])[1] || '';
     if (!href || seen[href]) continue;
     var title = _ent((c.match(/class="ipst__title"[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i) || [])[1] || '');
-    if (!title) title = _ent((c.match(/alt="([^"]*)"/i) || [])[1] || '');
+    var alt = _ent((c.match(/alt="([^"]*)"/i) || [])[1] || '');
+    if (!title) title = alt;
     if (!title) continue;
     var cover = (c.match(/<img[^>]+src="([^"]+)"/i) || [])[1] || null;
     var isMovie = /\/pelicula\//i.test(href);
     seen[href] = 1;
     out.push({
       id: href, url: href, title: title, cover: cover,
+      englishTitle: alt && _zNorm(alt) !== _zNorm(title) ? alt : null,
       type: isMovie ? 'movie' : 'tv', sourceId: __SOURCE_ID
     });
   }
@@ -200,11 +202,182 @@ function _zAlias(items, query) {
   return out;
 }
 
+// ── búsqueda con puente de idioma ────────────────────────────────────────────
+// El sitio indexa el título en español: una consulta en inglés devuelve cero.
+// Cuando el buscador no da nada aceptable se traduce la consulta (es↔en) y se
+// repite; lo que aparezca por traducción se entrega marcado con la consulta
+// original para que Z Mode lo dé por bueno.
+function _siteSearch(q) {
+  return _get(SITE + '/?s=' + encodeURIComponent(q), SITE + '/').then(function (html) {
+    return _cards(html);
+  }).catch(function () { return []; });
+}
+
+function _tr(q, tl) {
+  var u = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' + tl
+    + '&dt=t&q=' + encodeURIComponent(q);
+  return fetch(u, { headers: { 'User-Agent': UA, 'Accept-Language': 'es-419,es;q=0.9' } }).then(function (r) {
+    var j = null;
+    try { j = JSON.parse(r.body || '[]'); } catch (e) { return ''; }
+    var seg = (j && j[0]) || [], out = '';
+    for (var i = 0; i < seg.length; i++) if (seg[i] && seg[i][0]) out += seg[i][0];
+    return out.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+  }).catch(function () { return ''; });
+}
+
+// Primer item que cubre la consulta; `_zAlias` sólo reordena, esto dice si hay
+// algo que el filtro de título de la app vaya a aceptar.
+function _zTake(items, query) {
+  var q = _zNorm(query);
+  if (!q || !items || !items.length) return null;
+  var qt = q.split(' ').filter(function (t) { return t.length >= 4; });
+  if (!qt.length) return null;
+  var need = qt.length <= 3 ? qt.length : Math.ceil(qt.length * 0.75);
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    if (!it) continue;
+    var tt = (_zNorm(it.title) + ' ' + _zNorm(it.englishTitle || '')).split(' ');
+    var covered = 0;
+    for (var a = 0; a < qt.length; a++) {
+      for (var b = 0; b < tt.length; b++) {
+        var w = tt[b];
+        if (w.length < 4) continue;
+        if (w === qt[a] || w.indexOf(qt[a]) === 0 || qt[a].indexOf(w) === 0) { covered++; break; }
+      }
+    }
+    if (covered >= need) return it;
+  }
+  return null;
+}
+
+function _searchAll(queries) {
+  var jobs = [];
+  for (var i = 0; i < queries.length; i++) jobs.push(_siteSearch(queries[i]));
+  return Promise.all(jobs).then(function (lists) {
+    var out = [], seen = {};
+    for (var j = 0; j < lists.length; j++) {
+      for (var k = 0; k < (lists[j] || []).length; k++) {
+        var it = lists[j][k];
+        if (!it || !it.url || seen[it.url]) continue;
+        seen[it.url] = 1;
+        out.push(it);
+      }
+    }
+    return out;
+  });
+}
+
+// El título real se conserva; la consulta va en englishTitle, que es lo que el
+// filtro de Z Mode compara cuando el usuario trae el título "equivocado".
+function _mark(items, hit, query) {
+  var out = [], k;
+  hit.englishTitle = query;
+  out.push(hit);
+  for (k = 0; k < items.length; k++) if (items[k] && items[k].url !== hit.url) out.push(items[k]);
+  return out;
+}
+
+// El slug de la ficha es el título original en inglés: /serie/in-your-radiant-season/
+// devuelve la ficha con el título en español. Cuando el buscador no encuentra
+// nada, se prueba el slug directo — es lo que resuelve los "wrong title" que no
+// son traducción literal del título del sitio.
+function _zSlug(q) {
+  return String(q || '').toLowerCase()
+    .replace(/[áàäâã]/g, 'a').replace(/[éèëê]/g, 'e').replace(/[íìïî]/g, 'i')
+    .replace(/[óòöôõ]/g, 'o').replace(/[úùüû]/g, 'u').replace(/ñ/g, 'n').replace(/ç/g, 'c')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function _probeOne(path, slug) {
+  var u = SITE + path + slug + '/';
+  return fetch(u, { headers: { 'User-Agent': UA, 'Accept-Language': 'es-419,es;q=0.9' } }).then(function (r) {
+    if (!r || r.status >= 400) return null;
+    var html = r.body || '';
+    if (/no encontrada/i.test((html.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '')) return null;
+    var h1 = _ent(((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || [])[1] || '').replace(/<[^>]*>/g, ''));
+    if (!h1) return null;
+    return {
+      id: u, url: u, title: h1, cover: null,
+      type: path === '/pelicula/' ? 'movie' : 'tv', sourceId: __SOURCE_ID
+    };
+  }).catch(function () { return null; });
+}
+
+// Los slugs se sondean todos a la vez: seis GET en serie son ~4 s, en paralelo
+// ~1 s. Se respeta el orden de preferencia al elegir el resultado.
+function _probeSlugs(queries) {
+  var slugs = [], i, s, jobs = [], pairs = [];
+  for (i = 0; i < queries.length; i++) {
+    s = _zSlug(queries[i]);
+    if (s && slugs.indexOf(s) < 0 && slugs.length < 3) slugs.push(s);
+  }
+  if (!slugs.length) return Promise.resolve(null);
+  for (i = 0; i < slugs.length; i++) {
+    jobs.push(_probeOne('/serie/', slugs[i]));
+    jobs.push(_probeOne('/pelicula/', slugs[i]));
+    pairs.push(i);
+    pairs.push(i);
+  }
+  return Promise.all(jobs).then(function (res) {
+    var best = {}, k;
+    for (k = 0; k < res.length; k++) {
+      if (res[k] && !best[pairs[k]]) best[pairs[k]] = res[k];
+    }
+    for (i = 0; i < slugs.length; i++) if (best[i]) return best[i];
+    return null;
+  });
+}
+
+// Español o portugués: la consulta ya viene en el idioma del sitio, así que sólo
+// hace falta la versión original (el slug) — no las dos traducciones.
+var _ES_STOP = ['el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'de', 'del', 'que', 'en',
+  'y', 'con', 'por', 'para', 'mi', 'tu', 'su', 'al', 'se', 'es', 'mas', 'como', 'pero', 'muy',
+  'ya', 'sin', 'sobre', 'entre', 'cuando', 'donde', 'otra', 'otro', 'esta', 'este'];
+
+function _looksSpanish(q) {
+  if (/[áéíóúñü¿¡]/i.test(String(q))) return true;
+  var w = _zNorm(q).split(' '), i;
+  for (i = 0; i < w.length; i++) if (_ES_STOP.indexOf(w[i]) >= 0) return true;
+  return false;
+}
+
+// Cuando no hubo coincidencia real, la lista es ruido del buscador: un item sin
+// una sola palabra en común confunde más de lo que ayuda.
+function _relevant(items, queries) {
+  var words = {}, i, k, tt;
+  for (i = 0; i < queries.length; i++) {
+    tt = _zNorm(queries[i]).split(' ');
+    for (k = 0; k < tt.length; k++) if (tt[k].length >= 4) words[tt[k]] = 1;
+  }
+  var out = [];
+  for (i = 0; i < items.length; i++) {
+    tt = (_zNorm(items[i].title) + ' ' + _zNorm(items[i].englishTitle || '')).split(' ');
+    for (k = 0; k < tt.length; k++) {
+      if (tt[k].length >= 4 && words[tt[k]]) { out.push(items[i]); break; }
+    }
+  }
+  return out;
+}
+
 function search(query, page) {
   var q = String(query || '').replace(/^\s+|\s+$/g, '');
   if (!q) return Promise.resolve([]);
-  return _get(SITE + '/?s=' + encodeURIComponent(q), SITE + '/').then(function (html) {
-    return _zAlias(_cards(html), q);
+  return _siteSearch(q).then(function (base) {
+    if (_zTake(base, q)) return _zAlias(base, q);
+    var spanish = _looksSpanish(q);
+    return _tr(q, spanish ? 'en' : 'es').then(function (alt) {
+      var qs = [q];
+      if (alt && _zNorm(alt) !== _zNorm(q)) qs.push(alt);
+      return _searchAll(qs).then(function (all) {
+        var hit = _zTake(all, q) || (alt && _zTake(all, alt)) || null;
+        if (hit) return _mark(all, hit, q);
+        return _probeSlugs(qs).then(function (found) {
+          if (found) return _mark(all, found, q);
+          var keep = _relevant(all, qs);
+          return keep.length ? _zAlias(keep, q) : [];
+        });
+      });
+    });
   }).catch(function () { return []; });
 }
 

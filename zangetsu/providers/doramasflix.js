@@ -8,7 +8,7 @@ var SITE = 'https://doramasflix.in';
 var API = 'https://sv1.fluxcedene.net/api/gql';
 var PLATFORM = 'RxARncfg1S_MdpSrCvreoLu_SikCGMzE1NzQzODc3NjE2MQ==';
 var TMDB = 'https://image.tmdb.org/t/p/w500';
-var VERSION = '1.2.0';
+var VERSION = '1.3.0';
 
 function getInfo() {
   return {
@@ -491,15 +491,19 @@ function _zNorm(s) {
 
 // Z Mode se queda con el primer resultado que acepta el título: los que
 // coinciden con la consulta se ponen delante y se marcan con englishTitle.
+// El puntaje mira título y alias (name_es), y los que no coinciden se conservan
+// detrás: antes se perdían porque ya traían englishTitle de la ficha.
 function _zAlias(items, query) {
   var q = _zNorm(query);
   if (!q || !items || !items.length) return items;
   var qt = q.split(' ').filter(function (t) { return t.length >= 4; });
   if (!qt.length) return items;
-  var scored = [];
-  for (var i = 0; i < items.length; i++) {
-    if (!items[i] || !items[i].title) continue;
-    var tt = _zNorm(items[i].title).split(' ');
+  var need = qt.length <= 3 ? qt.length : Math.ceil(qt.length * 0.75);
+  var scored = [], i;
+  for (i = 0; i < items.length; i++) {
+    var it = items[i];
+    if (!it || !it.title) continue;
+    var tt = (_zNorm(it.title) + ' ' + _zNorm(it.englishTitle || '')).split(' ');
     var score = 0, covered = 0;
     for (var a = 0; a < qt.length; a++) {
       var best = 0;
@@ -512,10 +516,9 @@ function _zAlias(items, query) {
       if (best) covered++;
       score += best;
     }
-    var need = qt.length <= 3 ? qt.length : Math.ceil(qt.length * 0.75);
     if (covered < need) continue;
-    items[i].englishTitle = query;
-    scored.push({ it: items[i], score: score, words: tt.length, at: i });
+    it.englishTitle = query;
+    scored.push({ it: it, score: score, words: tt.length, at: i });
   }
   if (!scored.length) return items;
   scored.sort(function (x, y) {
@@ -523,21 +526,21 @@ function _zAlias(items, query) {
     if (x.words !== y.words) return x.words - y.words;
     return x.at - y.at;
   });
-  var out = [];
-  for (var s = 0; s < scored.length; s++) out.push(scored[s].it);
-  for (var k = 0; k < items.length; k++) if (!items[k].englishTitle) out.push(items[k]);
+  var out = [], used = {};
+  for (var s = 0; s < scored.length; s++) { out.push(scored[s].it); used[scored[s].at] = 1; }
+  for (var k = 0; k < items.length; k++) if (!used[k]) out.push(items[k]);
   return out;
 }
 
-// El buscador del API ya pega por nombre original y en español; se piden los
-// dos listados a la vez y se funden, sin repetir.
-function search(query, page) {
-  var q = String(query || '').replace(/^\s+|\s+$/g, '');
-  if (!q) return Promise.resolve([]);
+// El API busca por nombre original y por name_es, pero ordena por relevancia
+// difusa: un título localizado distinto al del sitio puede quedar fuera del
+// filtro de Z Mode. La cascada va de la señal más fuerte a la más débil y sólo
+// paga los pasos caros cuando los baratos no alcanzan.
+function _searchQ(q) {
   return _gql('searchAll', { input: q },
     'query searchAll($input: String!) { searchDorama(input: $input, limit: 32) { ' + Q_ITEM + ' } searchMovie(input: $input, limit: 32) { ' + Q_ITEM + ' } }'
   ).then(function (d) {
-    if (!d) return _listDoramas(page, 'POPULARITY_DESC').then(function (items) { return _zAlias(items, q); });
+    if (!d) return [];
     var out = [], seen = {}, i;
     var series = d.searchDorama || [];
     for (i = 0; i < series.length; i++) {
@@ -549,8 +552,175 @@ function search(query, page) {
       var b = _item(movies[i], true);
       if (b && !seen[b.url]) { seen[b.url] = 1; out.push(b); }
     }
-    return _zAlias(out, q);
+    return out;
   }).catch(function () { return []; });
+}
+
+function _merge(lists) {
+  var out = [], seen = {}, i, k;
+  for (i = 0; i < lists.length; i++) {
+    for (k = 0; k < (lists[i] || []).length; k++) {
+      var it = lists[i][k];
+      if (!it || !it.url || seen[it.url]) continue;
+      seen[it.url] = 1;
+      out.push(it);
+    }
+  }
+  return out;
+}
+
+function _tr(q, tl) {
+  var u = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' + tl
+    + '&dt=t&q=' + encodeURIComponent(q);
+  return fetch(u, { headers: { 'User-Agent': UA, 'Accept-Language': 'es-419,es;q=0.9' } }).then(function (r) {
+    var j = null;
+    try { j = JSON.parse(r.body || '[]'); } catch (e) { return ''; }
+    var seg = (j && j[0]) || [], out = '';
+    for (var i = 0; i < seg.length; i++) if (seg[i] && seg[i][0]) out += seg[i][0];
+    return out.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+  }).catch(function () { return ''; });
+}
+
+// Igualdad normalizada: el nombre que el sitio ya tiene, tal cual lo pidió el
+// usuario. Es la señal más fuerte, sin importar cómo quedó ordenada la lista.
+function _exactHit(items, query) {
+  var q = _zNorm(query);
+  if (!q) return null;
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    if (!it) continue;
+    if (_zNorm(it.title) === q || _zNorm(it.englishTitle || '') === q) return it;
+  }
+  return null;
+}
+
+// Primer item que cubre la consulta; `_zAlias` sólo reordena, esto dice si hay
+// algo que el filtro de título de la app vaya a aceptar.
+function _zTake(items, query) {
+  var q = _zNorm(query);
+  if (!q || !items || !items.length) return null;
+  var qt = q.split(' ').filter(function (t) { return t.length >= 4; });
+  if (!qt.length) return null;
+  var need = qt.length <= 3 ? qt.length : Math.ceil(qt.length * 0.75);
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    if (!it) continue;
+    var tt = (_zNorm(it.title) + ' ' + _zNorm(it.englishTitle || '')).split(' ');
+    var covered = 0;
+    for (var a = 0; a < qt.length; a++) {
+      for (var b = 0; b < tt.length; b++) {
+        var w = tt[b];
+        if (w.length < 4) continue;
+        if (w === qt[a] || w.indexOf(qt[a]) === 0 || qt[a].indexOf(w) === 0) { covered++; break; }
+      }
+    }
+    if (covered >= need) return it;
+  }
+  return null;
+}
+
+// El título del sitio se conserva; la consulta va en englishTitle, que es lo que
+// el filtro de Z Mode compara cuando el usuario trae el título "equivocado".
+function _mark(items, hit, query) {
+  var out = [], k;
+  hit.englishTitle = query;
+  out.push(hit);
+  for (k = 0; k < items.length; k++) if (items[k] && items[k].url !== hit.url) out.push(items[k]);
+  return out;
+}
+
+function _stripTags(s) {
+  return String(s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+}
+
+// Sólo se paga el puente cuando la consulta viene en español: las consultas en
+// inglés ya las resuelve el buscador del sitio.
+var _ES_STOP = ['el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'de', 'del', 'que', 'en',
+  'y', 'con', 'por', 'para', 'mi', 'tu', 'su', 'al', 'se', 'es', 'mas', 'como', 'pero', 'muy',
+  'ya', 'sin', 'sobre', 'entre', 'cuando', 'donde', 'otra', 'otro', 'esta', 'este'];
+
+function _looksSpanish(q) {
+  if (/[áéíóúñü¿¡]/i.test(String(q))) return true;
+  var w = _zNorm(q).split(' '), i;
+  for (i = 0; i < w.length; i++) if (_ES_STOP.indexOf(w[i]) >= 0) return true;
+  return false;
+}
+
+// Último recurso: el título localizado no existe en Doramasflix de forma
+// reconocible, pero la ficha de Tudorama sí lo conoce y su slug ES el título
+// original en inglés. Se lee ese slug y se busca el original aquí.
+function _bridge(q) {
+  var u = 'https://tudorama.com/?s=' + encodeURIComponent(q);
+  return fetch(u, { headers: { 'User-Agent': UA, 'Accept-Language': 'es-419,es;q=0.9' } }).then(function (r) {
+    if (!r || r.status >= 400) return [];
+    var chunk = String(r.body || '').split(/<article class="ipst/)[1];
+    if (!chunk) return [];
+    chunk = chunk.split(/<\/article>/)[0];
+    var slug = (chunk.match(/https?:\/\/tudorama\.com\/(?:serie|pelicula)\/([^"\/]+)\//i) || [])[1] || '';
+    var h1 = _stripTags((chunk.match(/class="ipst__title"[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i) || [])[1] || '');
+    var out = [], i, t, alts = [];
+    if (slug) alts.push(slug.replace(/-/g, ' '));
+    if (h1) alts.push(h1);
+    for (i = 0; i < alts.length; i++) {
+      t = alts[i];
+      if (t && out.indexOf(t) < 0) out.push(t);
+    }
+    return out;
+  }).catch(function () { return []; });
+}
+
+function _fromAlts(alts, pool, q) {
+  if (!alts || !alts.length) return Promise.resolve(null);
+  var i, probes = [], tried = {};
+  for (i = 0; i < alts.length && probes.length < 2; i++) {
+    if (!alts[i] || _zNorm(alts[i]) === _zNorm(q) || tried[_zNorm(alts[i])]) continue;
+    tried[_zNorm(alts[i])] = 1;
+    probes.push(_searchQ(alts[i]));
+  }
+  if (!probes.length) return Promise.resolve(null);
+  return Promise.all(probes).then(function (lists) {
+    var all = _merge([pool].concat(lists)), found = null;
+    for (i = 0; i < alts.length && !found; i++) found = _exactHit(all, alts[i]);
+    if (!found) found = _zTake(all, alts[0]);
+    return found ? { items: all, hit: found } : null;
+  });
+}
+
+function search(query, page) {
+  var q = String(query || '').replace(/^\s+|\s+$/g, '');
+  if (!q) return Promise.resolve([]);
+  return _searchQ(q).then(function (base) {
+    var direct = _exactHit(base, q);
+    if (direct) return _mark(base, direct, q);
+    var fuzzy = _zTake(base, q);
+    if (!_looksSpanish(q)) return fuzzy ? _zAlias(base, q) : _deepSearch(base, q);
+    // Título localizado que el sitio no tiene tal cual: el puente dice cuál es
+    // el original y esa ficha gana sobre el parecido léxico.
+    return _bridge(q).then(function (alts) {
+      if (!alts.length) return fuzzy ? _zAlias(base, q) : _deepSearch(base, q);
+      return _fromAlts(alts, base, q).then(function (found) {
+        if (found) return _mark(found.items, found.hit, q);
+        if (fuzzy) return _zAlias(base, q);
+        return _deepSearch(base, q);
+      });
+    });
+  }).catch(function () { return []; });
+}
+
+// Traducción es↔en para los títulos que no son el del sitio ni el original.
+function _deepSearch(base, q) {
+  return Promise.all([_tr(q, 'en'), _tr(q, 'es')]).then(function (tr) {
+    var en = tr[0], es = tr[1], jobs = [];
+    if (en && _zNorm(en) !== _zNorm(q)) jobs.push(_searchQ(en));
+    if (es && _zNorm(es) !== _zNorm(q)) jobs.push(_searchQ(es));
+    return Promise.all(jobs).then(function (more) {
+      var all = _merge([base].concat(more)), hit = null;
+      hit = _exactHit(all, q) || (en && _exactHit(all, en)) || (es && _exactHit(all, es)) || null;
+      if (!hit) hit = _zTake(all, q) || (en && _zTake(all, en)) || (es && _zTake(all, es)) || null;
+      if (hit) return _mark(all, hit, q);
+      return all.length ? _zAlias(all, q) : [];
+    });
+  }).catch(function () { return base.length ? _zAlias(base, q) : []; });
 }
 
 // ── detalle ──────────────────────────────────────────────────────────────────
