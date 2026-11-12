@@ -3,7 +3,7 @@
 
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://www.cinecalidad.am';
-var VERSION = '1.0.0';
+var VERSION = '1.1.0';
 
 function getInfo() {
   return {
@@ -108,6 +108,42 @@ function _wish(embed, ref, kind) {
   });
 }
 
+// streamwish / vidara / filelions family: the page runs a client-side
+// jwplayer fed by POST /api/stream {filecode}. One hop, plain JSON, no
+// packer — and it works where the Cloudflare-facing hosts do not.
+function _api(embed, ref, kind) {
+  var u = String(embed).replace(/\\\//g, '/');
+  var host = (u.match(/^(https?:\/\/[^/]+)/) || [])[1] || '';
+  var parts = u.split('?')[0].split('/').filter(function (x) { return !!x; });
+  var code = parts[parts.length - 1] || '';
+  if (!host || !code) return Promise.resolve([]);
+  var body = JSON.stringify({
+    filecode: code, device: 'android',
+    codecs: { av1: 'av01.0.09M.10', h265: 'hvc1.1.6.L123.B0' }
+  });
+  return fetch(host + '/api/stream', {
+    method: 'POST',
+    headers: {
+      'User-Agent': UA, 'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Origin': host, 'Referer': host + '/e/' + code
+    },
+    body: body
+  }).then(function (r) {
+    var d = null;
+    try { d = JSON.parse(r.body || 'null'); } catch (e) { return []; }
+    if (!d || !d.streaming_url) return [];
+    var out = [_stream(d.streaming_url, 'HD', embed, kind)];
+    var subs = d.subtitles || [];
+    for (var i = 0; i < subs.length && i < 4; i++) {
+      var t = subs[i];
+      if (!t || !t.file_path) continue;
+      out[0].subtitles.push({ url: t.file_path, lang: String(t.language || 'en').slice(0, 2).toLowerCase(), label: t.language || null });
+    }
+    return out;
+  }).catch(function () { return []; });
+}
+
 function _dood(embed, ref, kind) {
   var url = String(embed).replace('/d/', '/e/');
   return fetch(url, { headers: { 'User-Agent': UA, 'Referer': ref || SITE + '/' }, browser: true })
@@ -179,12 +215,44 @@ function _okru(embed, ref, kind) {
   });
 }
 
+// Playback budget: Z Mode gives a source 20s (25s if pinned) to answer, and
+// Promise.all waits for the SLOWEST mirror. So order by how fast a host
+// actually resolves and never start the ones that always die: one dead
+// Cloudflare embed would eat the whole budget and the title looks stalled.
+function _rankEmbed(u) {
+  var s = String(u).toLowerCase();
+  if (s.indexOf('vimeos') >= 0) return 0;
+  if (s.indexOf('vidara') >= 0) return 1;
+  if (/streamwish|vidhide|awish|filelions|hgcloud|callistanise/.test(s)) return 3;
+  if (s.indexOf('mp4upload') >= 0) return 2;
+  if (s.indexOf('yourupload') >= 0) return 2;
+  if (s.indexOf('streamtape') >= 0) return 4;
+  if (/ok\.ru|okru/.test(s)) return 5;
+  if (/voe\./.test(s)) return 6;
+  if (/dood|dsvplay|ds2play|playmogo|savefiles/.test(s)) return 9; // Cloudflare: never resolves in the budget
+  return 7;
+}
+
+function _pickEmbeds(list, cap) {
+  var ranked = list.slice().sort(function (a, b) { return _rankEmbed(a) - _rankEmbed(b); });
+  var out = [];
+  for (var i = 0; i < ranked.length && out.length < cap; i++) {
+    if (_rankEmbed(ranked[i]) >= 9) continue;
+    out.push(ranked[i]);
+  }
+  return out;
+}
+
 function _resolve(embed, ref, kind) {
   var low = String(embed).toLowerCase();
   try {
     if (low.indexOf('vimeos') >= 0) return _vimeos(embed, ref, kind);
     if (low.indexOf('voe.') >= 0) return _voe(embed, ref, kind);
-    if (/streamwish|hgcloud|awish|vidhide|savefiles|vidara|filelions|callistanise|acek-cdn/.test(low)) return _wish(embed, ref, kind);
+    if (/streamwish|hgcloud|awish|vidhide|savefiles|vidara|filelions|callistanise|acek-cdn/.test(low)) {
+      return _api(embed, ref, kind).then(function (out) {
+        return out.length ? out : _wish(embed, ref, kind);
+      });
+    }
     if (/dood|dsvplay|ds2play|playmogo/.test(low)) return _dood(embed, ref, kind);
     if (low.indexOf('yourupload') >= 0) return _yourupload(embed, ref, kind);
     if (low.indexOf('mp4upload') >= 0) return _mp4upload(embed, ref, kind);
@@ -319,8 +387,10 @@ function getVideoSources(url) {
     }
     if (!opts.length) throw new Error('CineCalidad: sin reproductores');
 
+    var chosen = _pickEmbeds(opts, 3);
+    if (!chosen.length) chosen = opts.slice(0, 2);
     var jobs = [];
-    for (var i = 0; i < opts.length && i < 6; i++) jobs.push(_resolve(opts[i], url, 'dub'));
+    for (var i = 0; i < chosen.length; i++) jobs.push(_resolve(chosen[i], url, 'dub'));
     return Promise.all(jobs).then(function (lists) {
       var out = [], seen = {};
       for (var l = 0; l < lists.length; l++) {

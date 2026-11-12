@@ -171,7 +171,7 @@ const srch = await call("search", () => api.search("naruto", 1, { category: "" }
   `${l.length} items | ${l[0] ? l[0].title + " -> " + l[0].url : "-"}`);
 
 let detail = null;
-const target = pop?.[0]?.url || home?.[0]?.items?.[0]?.url || srch?.[0]?.url;
+const target = process.argv[3] || pop?.[0]?.url || home?.[0]?.items?.[0]?.url || srch?.[0]?.url;
 if (target) {
   detail = await call("detail", () => api.getDetail(target, { category: "sub" }), (d) =>
     `${d.title} | ${(d.episodes || []).length} eps | cover=${d.cover ? "si" : "no"} | genres=${(d.genres || []).join("/")}`);

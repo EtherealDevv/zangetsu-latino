@@ -5,7 +5,7 @@
     {
       "id": "cinecalidad",
       "name": "CineCalidad",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "type": "movie",
       "lang": "es",
       "file": "providers/cinecalidad.js",
@@ -15,7 +15,7 @@
     {
       "id": "cuevana3",
       "name": "Cuevana3",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "type": "movie",
       "lang": "es",
       "file": "providers/cuevana3.js",

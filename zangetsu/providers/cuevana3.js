@@ -8,7 +8,7 @@
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://wv3.cuevana3.eu';
 var ALT = ['https://wv3.cuevana3.eu', 'https://www.cuevana3.eu', 'https://cuevana3.ai'];
-var VERSION = '1.0.0';
+var VERSION = '1.1.0';
 var _base = null;
 
 function getInfo() {
@@ -152,6 +152,42 @@ function _yourupload(embed, ref, kind) {
   });
 }
 
+// streamwish / vidara / filelions family: the page runs a client-side
+// jwplayer fed by POST /api/stream {filecode}. One hop, plain JSON, no
+// packer — and it works where the Cloudflare-facing hosts do not.
+function _api(embed, ref, kind) {
+  var u = String(embed).replace(/\\\//g, '/');
+  var host = (u.match(/^(https?:\/\/[^/]+)/) || [])[1] || '';
+  var parts = u.split('?')[0].split('/').filter(function (x) { return !!x; });
+  var code = parts[parts.length - 1] || '';
+  if (!host || !code) return Promise.resolve([]);
+  var body = JSON.stringify({
+    filecode: code, device: 'android',
+    codecs: { av1: 'av01.0.09M.10', h265: 'hvc1.1.6.L123.B0' }
+  });
+  return fetch(host + '/api/stream', {
+    method: 'POST',
+    headers: {
+      'User-Agent': UA, 'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Origin': host, 'Referer': host + '/e/' + code
+    },
+    body: body
+  }).then(function (r) {
+    var d = null;
+    try { d = JSON.parse(r.body || 'null'); } catch (e) { return []; }
+    if (!d || !d.streaming_url) return [];
+    var out = [_stream(d.streaming_url, 'HD', embed, kind)];
+    var subs = d.subtitles || [];
+    for (var i = 0; i < subs.length && i < 4; i++) {
+      var t = subs[i];
+      if (!t || !t.file_path) continue;
+      out[0].subtitles.push({ url: t.file_path, lang: String(t.language || 'en').slice(0, 2).toLowerCase(), label: t.language || null });
+    }
+    return out;
+  }).catch(function () { return []; });
+}
+
 function _streamtape(embed, ref, kind) {
   return _get(embed, ref).then(function (html) {
     var m = html.match(/id=([^&"']+)&token=([^&"']+)&expires=([^&"']+)&ip=([^"'&]+)/);
@@ -203,12 +239,32 @@ function _okru(embed, ref, kind) {
   });
 }
 
+// How fast a mirror actually resolves from a phone. dood/playmogo sit behind
+// Cloudflare and never answer inside Z Mode's ~20s source budget.
+function _rankLocker(name) {
+  var s = String(name || '').toLowerCase();
+  if (s.indexOf('vimeos') >= 0) return 0;
+  if (s.indexOf('vidara') >= 0) return 1;
+  if (/wish|vidhide|filelions|hgcloud|awish|callistanise/.test(s)) return 3;
+  if (s.indexOf('mp4upload') >= 0) return 2;
+  if (s.indexOf('yourupload') >= 0) return 2;
+  if (s.indexOf('streamtape') >= 0) return 4;
+  if (s.indexOf('okru') >= 0 || s.indexOf('ok.ru') >= 0) return 5;
+  if (s.indexOf('voe') >= 0) return 6;
+  if (/dood|playmogo|savefiles|dsvplay|ds2play/.test(s)) return 9;
+  return 7;
+}
+
 function _resolve(embed, ref, kind) {
   var low = String(embed).toLowerCase();
   if (/mega\.nz|mediafire|1fichier/.test(low)) return Promise.resolve([]);
   try {
     if (low.indexOf('vimeos') >= 0) return _vimeos(embed, ref, kind);
-    if (/streamwish|hgcloud|awish|vidhide|savefiles|vidara|filelions|callistanise|acek-cdn/.test(low)) return _wish(embed, ref, kind);
+    if (/streamwish|hgcloud|awish|vidhide|savefiles|vidara|filelions|callistanise|acek-cdn/.test(low)) {
+      return _api(embed, ref, kind).then(function (out) {
+        return out.length ? out : _wish(embed, ref, kind);
+      });
+    }
     if (/voe\./.test(low)) return _voe(embed, ref, kind);
     if (/mp4upload/.test(low)) return _mp4upload(embed, ref, kind);
     if (/yourupload/.test(low)) return _yourupload(embed, ref, kind);
@@ -402,26 +458,53 @@ function getVideoSources(url) {
 
       var langs = ['latino', 'spanish', 'english', 'japanese'];
       var labels = { latino: 'Latino', spanish: 'Español', english: 'Subtitulado', japanese: 'Japonés' };
-      var jobs = [];
-
+      // Budget first, language second: Z Mode allows ~20s per source and
+      // Promise.all waits for the slowest mirror, so a dood/playmogo embed
+      // that always sits behind Cloudflare would sink the whole resolve.
+      // Playable-but-subtitled beats nothing at all.
+      var cands = [];
       for (var l = 0; l < langs.length; l++) {
         var list = node.videos[langs[l]] || [];
-        for (var i = 0; i < list.length && i < 4; i++) {
+        for (var i = 0; i < list.length; i++) {
           var entry = list[i];
           if (!entry || !entry.result) continue;
-          var quality = labels[langs[l]] + (entry.quality ? ' ' + entry.quality : '');
-          jobs.push((function (playerUrl, q, lang) {
-            return _get(playerUrl, url).then(function (page) {
-              var m = page.match(/var url\s*=\s*['"]([^'"]+)['"]/i);
-              if (!m) return [];
-              var embed = m[1].replace(/\\\//g, '/');
-              return _resolve(embed, url, lang === 'english' ? 'sub' : 'dub').then(function (streams) {
-                for (var k = 0; k < streams.length; k++) streams[k].label = 'Cuevana3 · ' + q;
-                return streams;
-              });
-            }).catch(function () { return []; });
-          })(entry.result, quality, langs[l]));
+          cands.push({
+            player: entry.result,
+            locker: String(entry.cyberlocker || ''),
+            quality: labels[langs[l]] + (entry.quality ? ' ' + entry.quality : ''),
+            lang: langs[l]
+          });
         }
+      }
+
+      var langRank = { latino: 0, spanish: 1, english: 2, japanese: 3 };
+      cands.sort(function (a, b) {
+        var la = _rankLocker(a.locker), lb = _rankLocker(b.locker);
+        if (la !== lb) return la - lb;
+        return (langRank[a.lang] || 9) - (langRank[b.lang] || 9);
+      });
+
+      var chosen = [], skipped = 0;
+      for (var c = 0; c < cands.length && chosen.length < 4; c++) {
+        if (_rankLocker(cands[c].locker) >= 9) { skipped++; continue; }
+        chosen.push(cands[c]);
+      }
+      if (!chosen.length) chosen = cands.slice(0, 2);
+      if (skipped) console.log('cuevana3: ' + skipped + ' cloudflare-only mirror(s) skipped');
+
+      var jobs = [];
+      for (var j = 0; j < chosen.length; j++) {
+        jobs.push((function (playerUrl, q, lang) {
+          return _get(playerUrl, url).then(function (page) {
+            var m = page.match(/var url\s*=\s*['"]([^'"]+)['"]/i);
+            if (!m) return [];
+            var embed = m[1].replace(/\\\//g, '/');
+            return _resolve(embed, url, lang === 'english' ? 'sub' : 'dub').then(function (streams) {
+              for (var k = 0; k < streams.length; k++) streams[k].label = 'Cuevana3 · ' + q;
+              return streams;
+            });
+          }).catch(function () { return []; });
+        })(chosen[j].player, chosen[j].quality, chosen[j].lang));
       }
 
       if (!jobs.length) throw new Error('Cuevana3: sin reproductores');
@@ -438,6 +521,13 @@ function getVideoSources(url) {
           }
         }
         if (!out.length) throw new Error('Cuevana3: mirror sin stream');
+        // Latino audio first, then HLS: the player takes the head of the list.
+        out.sort(function (a, b) {
+          var ka = (a.kind === 'dub' ? 0 : 1), kb = (b.kind === 'dub' ? 0 : 1);
+          if (ka !== kb) return ka - kb;
+          var ca = (a.container === 'hls' ? 0 : 1), cb = (b.container === 'hls' ? 0 : 1);
+          return ca - cb;
+        });
         return out;
       });
     });
