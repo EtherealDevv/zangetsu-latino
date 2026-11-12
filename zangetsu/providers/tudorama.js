@@ -8,7 +8,7 @@
 
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://tudorama.com';
-var VERSION = '1.3.2';
+var VERSION = '1.3.3';
 
 function getInfo() {
   return {
@@ -128,7 +128,15 @@ function getHome() {
     _list('/genero/emision/').then(function (i) { return { title: 'En emisión', items: i }; }),
     _list('/genero/series/').then(function (i) { return { title: 'K-Dramas', items: i }; }),
     _list('/genero/peliculas/').then(function (i) { return { title: 'Películas asiáticas', items: i }; })
-  ]).catch(function () { return []; });
+  ]).then(function (sections) {
+    var s = 'TUD home sections=' + sections.length;
+    for (var i = 0; i < sections.length; i++) s += ' [' + sections[i].title + ':' + sections[i].items.length + ']';
+    try { console.log(s); } catch (e) {}
+    return sections;
+  }).catch(function (e) {
+    try { console.log('TUD home FAIL ' + String((e && e.message) || e)); } catch (x) {}
+    return [];
+  });
 }
 
 function popular(opts) {
@@ -430,8 +438,15 @@ function _diagCards(text) {
 function search(query, page) {
   var q = String(query || '').replace(/^\s+|\s+$/g, '');
   if (!q) return Promise.resolve([]);
+  try { console.log('TUD search q=[' + q + '] page=' + String(page)); } catch (e) {}
   if (DIAG) return _diag(q).then(function (cards) {
-    return _searchReal(q, page).then(function (real) { return cards.concat(real); }, function () { return cards; });
+    return _searchReal(q, page).then(function (real) {
+      try { console.log('TUD search real=' + real.length + ' first=[' + (real[0] ? real[0].title : '') + ']'); } catch (e) {}
+      return cards.concat(real);
+    }, function (e) {
+      try { console.log('TUD search FAIL ' + String((e && e.message) || e)); } catch (x) {}
+      return cards;
+    });
   });
   return _searchReal(q, page);
 }
