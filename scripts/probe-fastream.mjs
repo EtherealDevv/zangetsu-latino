@@ -1,0 +1,11 @@
+﻿const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36";
+const H = { "User-Agent": UA, "Accept-Language": "es-419,es;q=0.9" };
+const r = await fetch("https://fastream.to/embed-75qx4isw4dff.html", { headers: { ...H, Referer: "https://magistv24.com/" }, redirect: "follow" });
+const b = await r.text();
+console.log("len", b.length);
+const i = b.indexOf("eval(");
+console.log("eval at", i);
+console.log(b.slice(Math.max(0, i - 200), i + 400).replace(/\s+/g, " "));
+const j = b.search(/\.mp4|\.m3u8|sources|file\s*:/i);
+console.log("\nnear stream refs:", j);
+console.log(b.slice(Math.max(0, j - 300), j + 300).replace(/\s+/g, " "));

@@ -8,7 +8,7 @@
 
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://tudorama.com';
-var VERSION = '1.3.0';
+var VERSION = '1.3.1';
 
 function getInfo() {
   return {
@@ -404,7 +404,32 @@ function _looseSearch(variants) {
   }).catch(function () { return null; });
 }
 
+// ── sonda: se apaga poniendo DIAG = false ────────────────────────────────────
+var DIAG = true;
+
+function _diag(q) {
+  return fetch(SITE + '/?s=' + encodeURIComponent(q), { headers: { 'User-Agent': UA } }).then(function (r) {
+    var info = [];
+    try { info.push('t:' + typeof r); } catch (e) { info.push('t:?'); }
+    try { info.push('txt:' + (r && typeof r.text === 'function' ? 1 : 0)); } catch (e) { info.push('txt:?'); }
+    try { info.push('len:' + (r && typeof r.body === 'string' ? r.body.length : -1)); } catch (e) { info.push('len:?'); }
+    try { info.push('k:' + (r && typeof r === 'object' ? Object.keys(r).slice(0, 5).join('|') : '-')); } catch (e) { info.push('k:?'); }
+    return [{ id: 'diag', url: SITE + '/', title: 'Q[' + q + '] ' + info.join(' '), cover: SITE + '/favicon.ico', type: 'tv', sourceId: __SOURCE_ID }];
+  }).catch(function (e) {
+    return [{ id: 'diag', url: SITE + '/', title: 'ERR[' + q + '] ' + String((e && e.message) || e), cover: '', type: 'tv', sourceId: __SOURCE_ID }];
+  });
+}
+
 function search(query, page) {
+  var q = String(query || '').replace(/^\s+|\s+$/g, '');
+  if (!q) return Promise.resolve([]);
+  if (DIAG) return _diag(q).then(function (cards) {
+    return _searchReal(q, page).then(function (real) { return cards.concat(real); }, function () { return cards; });
+  });
+  return _searchReal(q, page);
+}
+
+function _searchReal(query, page) {
   var q = String(query || '').replace(/^\s+|\s+$/g, '');
   if (!q) return Promise.resolve([]);
   // El sitio y la traducción no dependen uno del otro: se piden a la vez.

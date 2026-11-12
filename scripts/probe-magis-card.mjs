@@ -1,0 +1,15 @@
+﻿const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36";
+const H = { "User-Agent": UA, "Accept-Language": "es-419,es;q=0.9" };
+const r = await fetch("https://magistv24.com/", { headers: H, redirect: "follow" });
+const b = await r.text();
+const i = b.indexOf("/pelicula/proyecto-almanac/");
+console.log("=== card around first pelicula link ===");
+console.log(b.slice(Math.max(0, i - 1100), i + 700).replace(/\s+/g, " "));
+const s = await fetch("https://magistv24.com/serie/los-simpson/", { headers: H, redirect: "follow" });
+const sb = await s.text();
+const j = sb.indexOf("temporada-1-capitulo-2");
+console.log("\n=== episode link context ===");
+console.log(sb.slice(Math.max(0, j - 500), j + 300).replace(/\s+/g, " "));
+const k = sb.indexOf("temporada");
+console.log("\n=== season selector ===");
+console.log(sb.slice(Math.max(0, k - 300), k + 500).replace(/\s+/g, " "));
