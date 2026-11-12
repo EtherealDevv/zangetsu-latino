@@ -8,7 +8,7 @@
 
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://tudorama.com';
-var VERSION = '1.3.1';
+var VERSION = '1.3.2';
 
 function getInfo() {
   return {
@@ -414,10 +414,17 @@ function _diag(q) {
     try { info.push('txt:' + (r && typeof r.text === 'function' ? 1 : 0)); } catch (e) { info.push('txt:?'); }
     try { info.push('len:' + (r && typeof r.body === 'string' ? r.body.length : -1)); } catch (e) { info.push('len:?'); }
     try { info.push('k:' + (r && typeof r === 'object' ? Object.keys(r).slice(0, 5).join('|') : '-')); } catch (e) { info.push('k:?'); }
-    return [{ id: 'diag', url: SITE + '/', title: 'Q[' + q + '] ' + info.join(' '), cover: SITE + '/favicon.ico', type: 'tv', sourceId: __SOURCE_ID }];
+    return _diagCards('V132 ' + info.join(' ') + ' Q[' + q + ']');
   }).catch(function (e) {
-    return [{ id: 'diag', url: SITE + '/', title: 'ERR[' + q + '] ' + String((e && e.message) || e), cover: '', type: 'tv', sourceId: __SOURCE_ID }];
+    return _diagCards('V132 ERR[' + q + '] ' + String((e && e.message) || e));
   });
+}
+
+function _diagCards(text) {
+  return [
+    { id: 'diag-tv', url: SITE + '/', title: 'TV ' + text, cover: SITE + '/favicon.ico', type: 'tv', sourceId: __SOURCE_ID },
+    { id: 'diag-mv', url: SITE + '/', title: 'MV ' + text, cover: SITE + '/favicon.ico', type: 'movie', sourceId: __SOURCE_ID }
+  ];
 }
 
 function search(query, page) {
