@@ -23,6 +23,26 @@
       "nsfw": false
     },
     {
+      "id": "magistv24",
+      "name": "MagisTV 24",
+      "version": "1.0.0",
+      "type": "movie",
+      "lang": "es",
+      "file": "providers/magistv24.js",
+      "logo": "https://magistv24.com/favicon.ico",
+      "nsfw": false
+    },
+    {
+      "id": "gnulahd",
+      "name": "GnulaHD",
+      "version": "1.0.0",
+      "type": "movie",
+      "lang": "es",
+      "file": "providers/gnulahd.js",
+      "logo": "https://ww3.gnulahd.nu/favicon.ico",
+      "nsfw": false
+    },
+    {
       "id": "jkanime",
       "name": "JKAnime",
       "version": "1.0.0",
