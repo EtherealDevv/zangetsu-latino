@@ -8,7 +8,7 @@
 
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://tudorama.com';
-var VERSION = '1.2.0';
+var VERSION = '1.3.0';
 
 function getInfo() {
   return {
@@ -359,26 +359,87 @@ function _relevant(items, queries) {
   return out;
 }
 
+// El buscador del sitio sólo acierta palabras sueltas: "Propuesta laboral"
+// existe, pero la frase "propuesta de negocios" y el original "Business
+// Proposal" devuelven cero. Última capa: buscar cada palabra distintiva y
+// quedarse con la ficha que más palabras de la consulta contiene.
+var _NOISE = ['season', 'temporada', 'story', 'historia', 'episode', 'episodio', 'part', 'parte', 'version', 'edicion', 'series', 'serie'];
+
+function _words(s) {
+  var t = _zNorm(s).split(' '), out = [], i;
+  for (i = 0; i < t.length; i++) {
+    if (t[i].length >= 4 && _NOISE.indexOf(t[i]) < 0 && out.indexOf(t[i]) < 0) out.push(t[i]);
+  }
+  return out;
+}
+
+function _looseSearch(variants) {
+  var words = [], seen = {}, i, k, list;
+  for (i = 0; i < variants.length; i++) {
+    list = _words(variants[i]);
+    for (k = 0; k < list.length; k++) {
+      if (!seen[list[k]]) { seen[list[k]] = 1; words.push(list[k]); }
+    }
+  }
+  if (!words.length) return Promise.resolve(null);
+  var jobs = [];
+  for (i = 0; i < words.length && i < 4; i++) jobs.push(_siteSearch(words[i]));
+  return Promise.all(jobs).then(function (lists) {
+    var score = {}, items = {}, order = [], j, it, hay;
+    for (j = 0; j < lists.length; j++) {
+      for (k = 0; k < (lists[j] || []).length; k++) {
+        it = lists[j][k];
+        if (!it || !it.url) continue;
+        hay = ' ' + _zNorm(it.title) + ' ' + _zNorm(it.englishTitle || '') + ' ';
+        if (hay.indexOf(words[j]) < 0) continue;
+        if (!items[it.url]) { items[it.url] = it; order.push(it.url); score[it.url] = 0; }
+        score[it.url] += 1;
+      }
+    }
+    var best = null;
+    for (k = 0; k < order.length; k++) {
+      if (!best || score[order[k]] > score[best]) best = order[k];
+    }
+    return best ? items[best] : null;
+  }).catch(function () { return null; });
+}
+
 function search(query, page) {
   var q = String(query || '').replace(/^\s+|\s+$/g, '');
   if (!q) return Promise.resolve([]);
-  return _siteSearch(q).then(function (base) {
+  // El sitio y la traducción no dependen uno del otro: se piden a la vez.
+  var spanish = _looksSpanish(q);
+  return Promise.all([_siteSearch(q), _tr(q, spanish ? 'en' : 'es')]).then(function (first) {
+    var base = first[0] || [], alt = first[1] || '';
     if (_zTake(base, q)) return _zAlias(base, q);
-    var spanish = _looksSpanish(q);
-    return _tr(q, spanish ? 'en' : 'es').then(function (alt) {
-      var qs = [q];
-      if (alt && _zNorm(alt) !== _zNorm(q)) qs.push(alt);
-      return _searchAll(qs).then(function (all) {
-        var hit = _zTake(all, q) || (alt && _zTake(all, alt)) || null;
-        if (hit) return _mark(all, hit, q);
-        return _probeSlugs(qs).then(function (found) {
-          if (found) return _mark(all, found, q);
-          var keep = _relevant(all, qs);
-          return keep.length ? _zAlias(keep, q) : [];
-        });
-      });
+    var qs = [q];
+    if (alt && _zNorm(alt) !== _zNorm(q)) qs.push(alt);
+    // Las tres capas caras son independientes entre sí: en paralelo, y luego se
+    // elige por prioridad (parecido > slug > palabra suelta).
+    return Promise.all([_searchAll(qs.slice(1)), _probeSlugs(qs), _looseSearch(qs)]).then(function (res) {
+      var all = _mergeLists([base, res[0] || []]);
+      var slugHit = res[1], loose = res[2];
+      var hit = _zTake(all, q) || (qs[1] && _zTake(all, qs[1])) || null;
+      if (hit) return _mark(all, hit, q);
+      if (slugHit) return _mark(all, slugHit, q);
+      if (loose) return _mark(all, loose, q);
+      var keep = _relevant(all, qs);
+      return keep.length ? _zAlias(keep, q) : [];
     });
   }).catch(function () { return []; });
+}
+
+function _mergeLists(lists) {
+  var out = [], seen = {}, i, k, it;
+  for (i = 0; i < lists.length; i++) {
+    for (k = 0; k < (lists[i] || []).length; k++) {
+      it = lists[i][k];
+      if (!it || !it.url || seen[it.url]) continue;
+      seen[it.url] = 1;
+      out.push(it);
+    }
+  }
+  return out;
 }
 
 // ── detalle ──────────────────────────────────────────────────────────────────
