@@ -8,7 +8,7 @@
 
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://tudorama.com';
-var VERSION = '1.3.4';
+var VERSION = '1.3.6';
 
 function getInfo() {
   return {
@@ -111,9 +111,12 @@ function _cards(html) {
     var isMovie = /\/pelicula\//i.test(href);
     seen[href] = 1;
     out.push({
-      id: href, url: href, title: title, cover: cover,
+      id: href, url: href, link: href,
+      title: title, name: title,
+      cover: cover, image: cover, imageUrl: cover, poster: cover,
+      description: '', score: 0, airDate: '',
       englishTitle: alt && _zNorm(alt) !== _zNorm(title) ? alt : null,
-      type: isMovie ? 'movie' : 'tv', sourceId: __SOURCE_ID
+      type: isMovie ? 'movie' : 'tv', mediaType: isMovie ? 'movie' : 'tv', sourceId: __SOURCE_ID
     });
   }
   return out;
@@ -414,7 +417,7 @@ function _looseSearch(variants) {
 }
 
 // ── sonda: se apaga poniendo DIAG = false ────────────────────────────────────
-var DIAG = true;
+var DIAG = false;
 
 // Cada sonda viaja como URL: el logcat de la app imprime "[fetch] GET <url>",
 // asi vemos exactamente que llega al provider aunque console no salga.
@@ -458,7 +461,13 @@ function search(query, page) {
       return cards;
     });
   });
-  return _searchReal(q, page);
+  return _searchReal(q, page).then(function (r) {
+    try { console.log('TUD out=' + r.length + ' first=[' + (r[0] ? r[0].title : '') + ']'); } catch (e) {}
+    return r;
+  }, function (e) {
+    try { console.log('TUD out FAIL ' + String((e && e.message) || e)); } catch (x) {}
+    return [];
+  });
 }
 
 function _searchReal(query, page) {
