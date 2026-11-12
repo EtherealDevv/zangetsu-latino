@@ -8,7 +8,7 @@
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://wv3.cuevana3.eu';
 var ALT = ['https://wv3.cuevana3.eu', 'https://www.cuevana3.eu', 'https://cuevana3.ai'];
-var VERSION = '1.2.0';
+var VERSION = '1.2.1';
 var _base = null;
 
 function getInfo() {
@@ -412,7 +412,7 @@ function _zAlias(items, query) {
   for (var i = 0; i < items.length; i++) {
     if (!items[i] || !items[i].title) continue;
     var tt = _zNorm(items[i].title).split(' ');
-    var score = 0;
+    var score = 0, covered = 0;
     for (var a = 0; a < qt.length; a++) {
       var best = 0;
       for (var b = 0; b < tt.length; b++) {
@@ -422,9 +422,14 @@ function _zAlias(items, query) {
         // Prefijo en cualquiera de las dos direcciones: "Simpson" ~ "Simpsons".
         if (best < 1 && (w.indexOf(qt[a]) === 0 || qt[a].indexOf(w) === 0)) best = 1;
       }
+      if (best) covered++;
       score += best;
     }
-    if (!score) continue;
+    // Una sola palabra en común no basta: "Project Hail Mary" encontraría
+    // "Proud Mary" y el matcher reproduciría la película equivocada. Con hasta
+    // tres palabras se exige que estén TODAS; con más, el 75%.
+    var need = qt.length <= 3 ? qt.length : Math.ceil(qt.length * 0.75);
+    if (covered < need) continue;
     items[i].englishTitle = query;
     scored.push({ it: items[i], score: score, words: tt.length, at: i });
   }
