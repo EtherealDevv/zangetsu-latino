@@ -15,7 +15,7 @@
     {
       "id": "doramasflix",
       "name": "Doramasflix",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "type": "movie",
       "lang": "es",
       "file": "providers/doramasflix.js",
@@ -25,7 +25,7 @@
     {
       "id": "tudorama",
       "name": "Tudorama",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "type": "movie",
       "lang": "es",
       "file": "providers/tudorama.js",

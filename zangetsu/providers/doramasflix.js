@@ -8,7 +8,7 @@ var SITE = 'https://doramasflix.in';
 var API = 'https://sv1.fluxcedene.net/api/gql';
 var PLATFORM = 'RxARncfg1S_MdpSrCvreoLu_SikCGMzE1NzQzODc3NjE2MQ==';
 var TMDB = 'https://image.tmdb.org/t/p/w500';
-var VERSION = '1.1.0';
+var VERSION = '1.2.0';
 
 function getInfo() {
   return {
@@ -184,16 +184,192 @@ function _okru(embed, kind) {
 }
 
 // Hosts que no se pueden resolver desde el runtime: primeload exige una sesión
-// con fingerprint de canvas y un socket para firmar el m3u8; voe y byse sirven
-// un state machine / SPA con token AES-GCM; do7go, playmogo y dood están
-// detrás de Cloudflare managed challenge.
+// con fingerprint de canvas y un socket para firmar el m3u8; do7go, playmogo y
+// dood están detrás de Cloudflare managed challenge.
 function _deadHost(u) {
-  return /primeload|do7go|playmogo|dood\.|voe\.|susanexpectcare|bysefujedu|bysekoze|bysezoxexe|byse/i.test(String(u));
+  return /primeload|do7go|playmogo|dood\./i.test(String(u));
 }
 
 // Clones de streamwish (flaswish, vidhidepre, vidhidevip, sfastwish…): el
 // reproductor llega empaquetado y deja la lista en `var links={hls4,hls3,hls2}`
 // usando `hls4||hls3||hls2`; las rutas relativas van contra el propio embed.
+// ── voe / byse: los dos muros que quedaban ───────────────────────────────────
+// voe: la página trae un <script type="application/json"> con una sola cadena.
+// El decoder del sitio hace rot13, cambia siete tokens (@$ ^^ ~@ %? *~ !! #&)
+// por '_', borra los '_', atob, resta 3 a cada byte, invierte y atob otra vez.
+function _voeDecode(payload) {
+  var s = String(payload), i, out = '', c;
+  var junk = ['@$', '^^', '~@', '%?', '*~', '!!', '#&'];
+  for (i = 0; i < s.length; i++) {
+    c = s.charCodeAt(i);
+    if (c >= 65 && c <= 90) c = ((c - 65 + 13) % 26) + 65;
+    else if (c >= 97 && c <= 122) c = ((c - 97 + 13) % 26) + 97;
+    out += String.fromCharCode(c);
+  }
+  for (i = 0; i < junk.length; i++) out = out.split(junk[i]).join('_');
+  out = out.split('_').join('');
+  var b = base64ToBytes(out), bin = '';
+  for (i = 0; i < b.length; i++) bin += String.fromCharCode((b[i] - 3) & 255);
+  bin = bin.split('').reverse().join('');
+  var t = base64ToBytes(bin), txt = '';
+  for (i = 0; i < t.length; i++) txt += String.fromCharCode(t[i]);
+  return txt;
+}
+
+function _host(u) {
+  var m = String(u).match(/^(https?:\/\/[^\/]+)/i);
+  return m ? m[1] : '';
+}
+
+function _voe(embed, kind) {
+  var host = _host(embed);
+  return _get(embed, SITE + '/').then(function (html) {
+    var m = String(html || '').match(/<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/i);
+    if (!m) return [];
+    var arr = null;
+    try { arr = JSON.parse(m[1]); } catch (e) { return []; }
+    var raw = (arr && arr.length) ? arr[0] : (arr && arr.payload);
+    if (typeof raw !== 'string') return [];
+    var conf = null;
+    try { conf = JSON.parse(_voeDecode(raw)); } catch (e) { return []; }
+    if (!conf) return [];
+    var list = [], fb = conf.fallback, i, u, out = [], seen = {};
+    if (conf.source) list.push(conf.source);
+    if (typeof fb === 'string') fb = [fb];
+    if (fb && fb.length) for (i = 0; i < fb.length && i < 4; i++) list.push(fb[i]);
+    if (!list.length && conf.direct_access_url) list.push(conf.direct_access_url);
+    for (i = 0; i < list.length; i++) {
+      u = /^https?:/i.test(list[i]) ? list[i] : _abs(list[i], embed);
+      if (!u || seen[u]) continue;
+      seen[u] = 1;
+      out.push(_stream(u, i ? 'auto' : 'HD', host + '/', kind));
+    }
+    return out;
+  });
+}
+
+// byse: el meta trae playback cifrado con AES-256-GCM. La clave son dos
+// key_parts (base64url) cuyo orden fija `version` (n y 31-n). GCM arranca el
+// keystream de CTR en el contador 2, así que descifrar es AES-256-CTR y la
+// etiqueta de 16 bytes del final se descarta.
+var _SBOX = (function () {
+  var sbox = [], inv = [], p = 1, q = 1, i, x, r, k;
+  for (i = 0; i < 256; i++) inv[i] = 0;
+  do {
+    p = (p ^ ((p << 1) & 255) ^ (p & 128 ? 27 : 0)) & 255;
+    q = (q ^ (q << 1)) & 255; q = (q ^ (q << 2)) & 255; q = (q ^ (q << 4)) & 255;
+    if (q & 128) q ^= 9;
+    inv[p] = q;
+  } while (p !== 1);
+  for (i = 0; i < 256; i++) {
+    x = inv[i]; r = x;
+    for (k = 0; k < 4; k++) { r = ((r << 1) | (r >>> 7)) & 255; x ^= r; }
+    sbox[i] = x ^ 99;
+  }
+  return sbox;
+})();
+
+function _xtime(b) { return ((b << 1) ^ (b & 128 ? 27 : 0)) & 255; }
+function _mul(a, b) { var r = 0; while (b) { if (b & 1) r ^= a; a = _xtime(a); b >>= 1; } return r; }
+
+function _aesExpand(key) {
+  var nk = 8, nr = 14, w = [], i, j, t, rcon = 1;
+  for (i = 0; i < key.length; i++) w[i] = key[i];
+  for (i = nk; i < 4 * (nr + 1); i++) {
+    t = [w[(i - 1) * 4], w[(i - 1) * 4 + 1], w[(i - 1) * 4 + 2], w[(i - 1) * 4 + 3]];
+    if (i % nk === 0) {
+      t = [_SBOX[t[1]] ^ rcon, _SBOX[t[2]], _SBOX[t[3]], _SBOX[t[0]]];
+      rcon = _xtime(rcon);
+    } else if (i % nk === 4) {
+      t = [_SBOX[t[0]], _SBOX[t[1]], _SBOX[t[2]], _SBOX[t[3]]];
+    }
+    for (j = 0; j < 4; j++) w[i * 4 + j] = w[(i - nk) * 4 + j] ^ t[j];
+  }
+  return w;
+}
+
+function _aesBlock(w, input) {
+  var nr = 14, s = [], t = [], round, i, c, r, a0, a1, a2, a3;
+  for (i = 0; i < 16; i++) s[i] = input[i] ^ w[i];
+  for (round = 1; round <= nr; round++) {
+    for (i = 0; i < 16; i++) s[i] = _SBOX[s[i]];
+    for (i = 0; i < 16; i++) t[i] = s[i];
+    for (c = 0; c < 4; c++) for (r = 0; r < 4; r++) s[r + 4 * c] = t[r + 4 * ((c + r) % 4)];
+    if (round !== nr) {
+      for (c = 0; c < 4; c++) {
+        a0 = s[4 * c]; a1 = s[4 * c + 1]; a2 = s[4 * c + 2]; a3 = s[4 * c + 3];
+        s[4 * c] = _mul(a0, 2) ^ _mul(a1, 3) ^ a2 ^ a3;
+        s[4 * c + 1] = a0 ^ _mul(a1, 2) ^ _mul(a2, 3) ^ a3;
+        s[4 * c + 2] = a0 ^ a1 ^ _mul(a2, 2) ^ _mul(a3, 3);
+        s[4 * c + 3] = _mul(a0, 3) ^ a1 ^ a2 ^ _mul(a3, 2);
+      }
+    }
+    for (i = 0; i < 16; i++) s[i] ^= w[round * 16 + i];
+  }
+  return s;
+}
+
+function _aesCtr(key, iv, data) {
+  var w = _aesExpand(key), ctr = [], out = [], off, i, n, ks, c = 2;
+  for (i = 0; i < 16; i++) ctr[i] = i < 12 ? iv[i] : 0;
+  for (off = 0; off < data.length; off += 16) {
+    ctr[12] = (c >>> 24) & 255; ctr[13] = (c >>> 16) & 255; ctr[14] = (c >>> 8) & 255; ctr[15] = c & 255;
+    ks = _aesBlock(w, ctr);
+    n = Math.min(16, data.length - off);
+    for (i = 0; i < n; i++) out[off + i] = data[off + i] ^ ks[i];
+    c = (c + 1) >>> 0;
+  }
+  return out;
+}
+
+function _b64u(s) {
+  s = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  return base64ToBytes(s);
+}
+
+function _bytesText(b) {
+  var s = '', i;
+  for (i = 0; i < b.length; i++) s += String.fromCharCode(b[i] & 255);
+  return s;
+}
+
+function _byse(embed, kind) {
+  var host = _host(embed);
+  var code = String(embed).replace(/[?#].*$/, '').replace(/\/+$/, '').split('/').pop();
+  if (!host || !code) return Promise.resolve([]);
+  return _get(host + '/api/videos/' + encodeURIComponent(code) + '/?embed=1', embed).then(function (txt) {
+    var j = null;
+    try { j = JSON.parse(txt); } catch (e) { return []; }
+    var p = j && j.playback;
+    if (!p || !p.payload || !p.iv || !p.key_parts || !p.key_parts.length) return [];
+    var parts = p.key_parts, ver = Number(p.version), use = [], i, k, b, key = [];
+    if (ver >= 1 && ver <= 20) {
+      var picks = [ver, 31 - ver];
+      for (i = 0; i < picks.length; i++) if (picks[i] >= 1 && picks[i] <= parts.length) use.push(parts[picks[i] - 1]);
+    }
+    if (!use.length) use = parts;
+    for (i = 0; i < use.length; i++) {
+      b = _b64u(use[i]);
+      for (k = 0; k < b.length; k++) key.push(b[k]);
+    }
+    if (key.length < 32) return [];
+    key = key.slice(0, 32);
+    var iv = _b64u(p.iv), all = _b64u(p.payload);
+    if (iv.length < 12 || all.length < 20) return [];
+    var conf = null;
+    try { conf = JSON.parse(_bytesText(_aesCtr(key, iv, all.slice(0, all.length - 16)))); } catch (e) { return []; }
+    var srcs = (conf && conf.sources) || [], out = [], seen = {};
+    for (i = 0; i < srcs.length; i++) {
+      var u = srcs[i] && srcs[i].url;
+      if (!u || seen[u]) continue;
+      seen[u] = 1;
+      out.push(_stream(u, srcs[i].label || 'HD', host + '/', kind));
+    }
+    return out;
+  });
+}
+
 function _swish(embed, kind) {
   return _get(embed, SITE + '/').then(function (html) {
     if (!html) return [];
@@ -220,6 +396,8 @@ function _swish(embed, kind) {
 function _resolve(embed, kind) {
   var u = String(embed || '').replace(/\\\//g, '/').replace(/#.*$/, '');
   if (!u || _deadHost(u)) return Promise.resolve([]);
+  if (/voe\.|susanexpectcare/i.test(u)) return _voe(u, kind);
+  if (/byse/i.test(u)) return _byse(u, kind);
   if (/mxdrop|mixdrop/i.test(u)) return _mx(u, kind);
   if (/uqload/i.test(u)) return _uq(u, kind);
   if (/streamtape|strtape/i.test(u)) return _tape(u, kind);
