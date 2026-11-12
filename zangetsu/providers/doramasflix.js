@@ -8,7 +8,7 @@ var SITE = 'https://doramasflix.in';
 var API = 'https://sv1.fluxcedene.net/api/gql';
 var PLATFORM = 'RxARncfg1S_MdpSrCvreoLu_SikCGMzE1NzQzODc3NjE2MQ==';
 var TMDB = 'https://image.tmdb.org/t/p/w500';
-var VERSION = '1.0.0';
+var VERSION = '1.1.0';
 
 function getInfo() {
   return {
@@ -51,7 +51,7 @@ function _stream(url, quality, ref, kind) {
   var u = String(url).replace(/\\\//g, '/');
   return {
     url: u, quality: quality || 'auto',
-    container: /\.m3u8(\?|$)/i.test(u) ? 'hls' : 'mp4',
+    container: /\.m3u8(\?|$)|\/hls\d?\//i.test(u) ? 'hls' : 'mp4',
     headers: { 'User-Agent': UA, 'Referer': ref || SITE + '/' },
     kind: kind || 'dub', audioLang: 'es', subtitles: []
   };
@@ -184,21 +184,48 @@ function _okru(embed, kind) {
 }
 
 // Hosts que no se pueden resolver desde el runtime: primeload exige una sesión
-// con fingerprint de canvas y un socket para firmar el m3u8; el resto está
-// detrás de Cloudflare o es un lander de anuncios.
+// con fingerprint de canvas y un socket para firmar el m3u8; voe y byse sirven
+// un state machine / SPA con token AES-GCM; do7go, playmogo y dood están
+// detrás de Cloudflare managed challenge.
 function _deadHost(u) {
-  return /primeload|do7go|playmogo|dood\.|sfastwish|bysefujedu|bysekoze|bysezoxexe|myvidplay|vide0\.net|flaswish|jodwish|wishfast|voe\.|susanexpectcare/i.test(String(u));
+  return /primeload|do7go|playmogo|dood\.|voe\.|susanexpectcare|bysefujedu|bysekoze|bysezoxexe|byse/i.test(String(u));
+}
+
+// Clones de streamwish (flaswish, vidhidepre, vidhidevip, sfastwish…): el
+// reproductor llega empaquetado y deja la lista en `var links={hls4,hls3,hls2}`
+// usando `hls4||hls3||hls2`; las rutas relativas van contra el propio embed.
+function _swish(embed, kind) {
+  return _get(embed, SITE + '/').then(function (html) {
+    if (!html) return [];
+    var code = _unpack(html);
+    var obj = (code.match(/links\s*=\s*\{([\s\S]*?)\}\s*;/) || [])[1] || '';
+    var out = [], seen = {}, order = ['hls4', 'hls3', 'hls2', 'hls', 'file'], o;
+    for (o = 0; o < order.length; o++) {
+      var m = obj.match(new RegExp('["\']?' + order[o] + '["\']?\\s*:\\s*["\']([^"\']+)["\']'));
+      if (!m) continue;
+      var u = _abs(m[1], embed);
+      if (!u || seen[u]) continue;
+      seen[u] = 1;
+      out.push(_stream(u, o <= 1 ? 'HD' : 'auto', embed, kind));
+    }
+    if (!out.length) {
+      var f = code.match(/(?:file|src)\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i)
+        || html.match(/(?:file|src)\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+      if (f) out.push(_stream(_abs(f[1], embed), 'HD', embed, kind));
+    }
+    return out;
+  });
 }
 
 function _resolve(embed, kind) {
   var u = String(embed || '').replace(/\\\//g, '/').replace(/#.*$/, '');
   if (!u || _deadHost(u)) return Promise.resolve([]);
   if (/mxdrop|mixdrop/i.test(u)) return _mx(u, kind);
-  if (/vidhide|filelions|vidhidepre|vidhidevip/i.test(u)) return _vidhide(u, kind);
   if (/uqload/i.test(u)) return _uq(u, kind);
   if (/streamtape|strtape/i.test(u)) return _tape(u, kind);
   if (/ok\.ru/i.test(u)) return _okru(u, kind);
-  return _vidhide(u, kind);
+  if (/vidhide|filelions|flaswish|sfastwish|wishfast|jodwish|streamwish|myvidplay|vudeo/i.test(u)) return _swish(u, kind);
+  return _swish(u, kind);
 }
 
 // ── catálogo ─────────────────────────────────────────────────────────────────
@@ -547,6 +574,33 @@ function _collect(list, kind) {
       }
     }
     if (!out.length) throw new Error('Doramasflix: mirrors sin stream');
+    return _verify(out);
+  });
+}
+
+// Los clones de streamwish devuelven rutas firmadas que a veces pertenecen a
+// otro nodo del CDN: se pide el master y sólo se entrega lo que responde
+// #EXTM3U. Los mp4 no se tocan (serían cientos de MB en memoria).
+function _verify(streams) {
+  var jobs = [], hls = [];
+  for (var i = 0; i < streams.length; i++) {
+    if (streams[i].container !== 'hls') continue;
+    hls.push(streams[i]);
+    (function (st) {
+      jobs.push(fetch(st.url, { headers: st.headers }).then(function (r) {
+        var b = r.body || '';
+        return (r.status < 400 && /#EXTM3U/.test(b)) ? st : null;
+      }).catch(function () { return null; }));
+    })(streams[i]);
+  }
+  if (!jobs.length) return streams;
+  return Promise.all(jobs).then(function (res) {
+    var okMap = {}, out = [];
+    for (var k = 0; k < res.length; k++) if (res[k]) okMap[res[k].url] = 1;
+    if (!Object.keys(okMap).length) return streams;
+    for (var s = 0; s < streams.length; s++) {
+      if (streams[s].container !== 'hls' || okMap[streams[s].url]) out.push(streams[s]);
+    }
     return out;
   });
 }

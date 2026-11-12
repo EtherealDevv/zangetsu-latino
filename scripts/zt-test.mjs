@@ -158,6 +158,30 @@ async function call(label, fn, fmt) {
   }
 }
 
+// Un stream sólo cuenta si el master responde y, si es HLS, la primera
+// variante también (ahí se cae lo que "parece" m3u8 pero es un lander).
+async function checkStream(s) {
+  const h = Object.assign({ "User-Agent": UA }, s.headers || {});
+  try {
+    const r = await fetch(s.url, { headers: h, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return { ok: false, info: `HTTP ${r.status}` };
+    const ct = r.headers.get("content-type") || "";
+    if (s.container === "hls" || /mpegurl/i.test(ct)) {
+      const t = await r.text();
+      if (!/#EXTM3U/.test(t)) return { ok: false, info: "sin #EXTM3U" };
+      const v = (t.split("\n").map((x) => x.trim()).find((x) => x && x.charAt(0) !== "#")) || "";
+      if (!v) return { ok: true, info: "master vacío" };
+      const vu = new URL(v, s.url).href;
+      const vr = await fetch(vu, { headers: h, signal: AbortSignal.timeout(20000) });
+      const vt = await vr.text();
+      return { ok: vr.ok && /#EXTM3U/.test(vt), info: `master+hls ${vr.status} ${vt.length}b` };
+    }
+    return { ok: true, info: `${ct || "?"} ${r.headers.get("content-length") || "?"}b` };
+  } catch (e) {
+    return { ok: false, info: String(e.cause?.code || e.message).slice(0, 40) };
+  }
+}
+
 console.log(`\n=== ${file}`);
 const info = await call("info", () => api.getInfo(), (v) => `${v.name} ${v.type} ${v.baseUrl} v${v.version}`);
 
@@ -179,10 +203,16 @@ if (target) {
 
 if (detail?.episodes?.length) {
   for (const ep of detail.episodes.slice(0, 2)) {
-    await call(`sources ${ep.title}`, () => api.getVideoSources(ep.url), (list) => {
-      if (!Array.isArray(list) || !list.length) return "0 streams";
-      return `${list.length} | ` + list.slice(0, 3).map((s) => `${s.kind || "?"}/${s.quality || "-"}=${s.url.slice(0, 64)}`).join(" | ");
+    const list = await call(`sources ${ep.title}`, () => api.getVideoSources(ep.url), (lst) => {
+      if (!Array.isArray(lst) || !lst.length) return "0 streams";
+      return `${lst.length} | ` + lst.slice(0, 3).map((s) => `${s.kind || "?"}/${s.quality || "-"}=${s.url.slice(0, 64)}`).join(" | ");
     });
+    if (process.env.ZT_VERIFY && Array.isArray(list)) {
+      for (const s of list.slice(0, Number(process.env.ZT_VERIFY) || 4)) {
+        const r = await checkStream(s);
+        console.log(`   verify ${r.ok ? "OK " : "BAD"} ${r.info} ${s.url.slice(0, 70)}`);
+      }
+    }
   }
 }
 
