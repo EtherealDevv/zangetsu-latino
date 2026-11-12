@@ -8,7 +8,7 @@
 
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36';
 var SITE = 'https://tudorama.com';
-var VERSION = '1.3.3';
+var VERSION = '1.3.4';
 
 function getInfo() {
   return {
@@ -131,6 +131,7 @@ function getHome() {
   ]).then(function (sections) {
     var s = 'TUD home sections=' + sections.length;
     for (var i = 0; i < sections.length; i++) s += ' [' + sections[i].title + ':' + sections[i].items.length + ']';
+    _probe('home:' + s);
     try { console.log(s); } catch (e) {}
     return sections;
   }).catch(function (e) {
@@ -415,6 +416,14 @@ function _looseSearch(variants) {
 // ── sonda: se apaga poniendo DIAG = false ────────────────────────────────────
 var DIAG = true;
 
+// Cada sonda viaja como URL: el logcat de la app imprime "[fetch] GET <url>",
+// asi vemos exactamente que llega al provider aunque console no salga.
+function _probe(tag) {
+  try {
+    fetch(SITE + '/?tud=' + VERSION + '&' + tag, { headers: { 'User-Agent': UA } }).then(function () {}, function () {});
+  } catch (e) {}
+}
+
 function _diag(q) {
   return fetch(SITE + '/?s=' + encodeURIComponent(q), { headers: { 'User-Agent': UA } }).then(function (r) {
     var info = [];
@@ -439,6 +448,7 @@ function search(query, page) {
   var q = String(query || '').replace(/^\s+|\s+$/g, '');
   if (!q) return Promise.resolve([]);
   try { console.log('TUD search q=[' + q + '] page=' + String(page)); } catch (e) {}
+  _probe('q=' + q + '&p=' + String(page));
   if (DIAG) return _diag(q).then(function (cards) {
     return _searchReal(q, page).then(function (real) {
       try { console.log('TUD search real=' + real.length + ' first=[' + (real[0] ? real[0].title : '') + ']'); } catch (e) {}
