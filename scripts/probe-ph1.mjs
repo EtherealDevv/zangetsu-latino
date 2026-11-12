@@ -1,0 +1,15 @@
+﻿const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36";
+const H = { "User-Agent": UA, "Accept-Language": "es-419,es;q=0.9" };
+const get = async (u) => { try { const r = await fetch(u, { headers: H, redirect: "manual" }); return { s: r.status, u: r.url, b: await r.text() }; } catch (e) { return { s: 0, b: "" }; } };
+const pp = (b) => { const m = b.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/); if (!m) return null; try { return JSON.parse(m[1]).props.pageProps; } catch { return null; } };
+const base = "https://www.poseidonhd2.co";
+const h = await get(base + "/");
+const p = pp(h.b);
+const m0 = p.tabLastMovies[0], s0 = (p.series || [])[0], e0 = (p.episodes || [])[0];
+console.log("movie slug:", JSON.stringify(m0 && m0.url));
+console.log("serie slug:", JSON.stringify(s0 && s0.url));
+console.log("ep:", JSON.stringify(e0 && { t: e0.title, url: e0.url }));
+const cands = [];
+const ms = m0 && m0.url && m0.url.slug ? m0.url.slug.split("/").pop() : "";
+for (const c of ["/ver-pelicula/" + ms, "/pelicula/" + ms, "/movies/" + ms]) cands.push(c);
+for (const c of cands) console.log(c.padEnd(40), (await get(base + c)).s);

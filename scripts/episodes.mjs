@@ -1,0 +1,10 @@
+const u = process.argv[2];
+const r = await fetch(u, { headers: { "User-Agent": "Mozilla/5.0 Chrome/135", "Accept-Language": "es-419,es;q=0.9" } });
+const h = await r.text();
+const out = new Set();
+for (const m of h.matchAll(/href="([^"]+)"/g)) if (/\/ver\//.test(m[1])) out.add(m[1]);
+console.log("count", out.size);
+console.log([...out].slice(0, 20).join("\n"));
+const i = h.indexOf("episodios");
+console.log("--- ctx episodios", i);
+if (i > 0) console.log(h.slice(Math.max(0, i - 500), i + 900).replace(/\s+/g, " "));

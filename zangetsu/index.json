@@ -1,0 +1,56 @@
+{
+  "name": "Zangetsu Latino",
+  "description": "Peliculas, series y anime en espanol latino para Zangetsu. Repo casero de fuentes verificadas.",
+  "sources": [
+    {
+      "id": "cinecalidad",
+      "name": "CineCalidad",
+      "version": "1.0.0",
+      "type": "movie",
+      "lang": "es",
+      "file": "providers/cinecalidad.js",
+      "logo": "https://www.cinecalidad.am/favicon.ico",
+      "nsfw": false
+    },
+    {
+      "id": "cuevana3",
+      "name": "Cuevana3",
+      "version": "1.0.0",
+      "type": "movie",
+      "lang": "es",
+      "file": "providers/cuevana3.js",
+      "logo": "https://wv3.cuevana3.eu/favicon-32x32.png",
+      "nsfw": false
+    },
+    {
+      "id": "jkanime",
+      "name": "JKAnime",
+      "version": "1.0.0",
+      "type": "anime",
+      "lang": "es",
+      "file": "providers/jkanime.js",
+      "logo": "https://jkanime.net/favicon.ico",
+      "nsfw": false
+    },
+    {
+      "id": "tioanime",
+      "name": "TioAnime",
+      "version": "1.0.0",
+      "type": "anime",
+      "lang": "es",
+      "file": "providers/tioanime.js",
+      "logo": "https://tioanime.com/favicon.ico",
+      "nsfw": false
+    },
+    {
+      "id": "monoschinos",
+      "name": "MonosChinos",
+      "version": "1.0.0",
+      "type": "anime",
+      "lang": "es",
+      "file": "providers/monoschinos.js",
+      "logo": "https://monoschinos.st/favicon.ico",
+      "nsfw": false
+    }
+  ]
+}
